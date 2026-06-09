@@ -45,6 +45,10 @@ class RecordsHandler(BaseHandler):
                         'avail_normal': record.avail_normal,
                         'avail_overtime': record.avail_overtime,
                         'work_content': record.work_content or '',
+                        'task_id': record.task_id or '',
+                        'task_name': record.task_name or '',
+                        'plan_start': record.plan_start or '',
+                        'plan_end': record.plan_end or '',
                         'status': record.status,
                         'created_at': record.created_at.strftime('%Y-%m-%d %H:%M:%S') if record.created_at else ''
                     })
@@ -305,6 +309,12 @@ class FillDraftHandler(BaseHandler):
             username = self.get_current_user()
             data = tornado.escape.json_decode(self.request.body)
             items = data.get('items', [])  # [{date, normal_hours, overtime_hours}]
+            # 任务快照（前端从"本次报工任务"传来：任务id/名/计划周期），盖到每条记录上 → 历史也能稳定判超期
+            task = data.get('task') or {}
+            t_id = str(task.get('task_id') or '').strip() or None
+            t_name = str(task.get('task_name') or '').strip() or None
+            t_ks = str(task.get('plan_start') or '').strip() or None
+            t_js = str(task.get('plan_end') or '').strip() or None
             log_api_call('FillDraftHandler', 'POST', {'username': username, 'count': len(items)})
 
             if not items:
@@ -326,6 +336,16 @@ class FillDraftHandler(BaseHandler):
                         default_content = ''
                 if not default_content:
                     default_content = DEFAULT_WORK_CONTENT   # 模板没工作描述时用默认
+                # 兜底：前端没传任务名/id 时，从配置模板补 gstbRwmc/gstbRwId（周期前端没传则留空）
+                if user_config and user_config.template_data:
+                    try:
+                        _td = json.loads(user_config.template_data)
+                        t_id = t_id or (str(_td.get('gstbRwId') or '').strip() or None)
+                        t_name = t_name or (str(_td.get('gstbRwmc') or '').strip() or None)
+                        t_ks = t_ks or (str(_td.get('_jhKsDate') or '').strip() or None)
+                        t_js = t_js or (str(_td.get('_jhJsDate') or '').strip() or None)
+                    except Exception:
+                        pass
 
                 count = 0
                 for it in items:
@@ -350,12 +370,17 @@ class FillDraftHandler(BaseHandler):
                         record.avail_normal = normal       # 记下可填上限（来自当天可报工时）
                         record.avail_overtime = overtime
                         record.status = 'pending'          # 重新拉回待填报
+                        record.task_id = t_id              # 重新盖章为当前任务
+                        record.task_name = t_name
+                        record.plan_start = t_ks
+                        record.plan_end = t_js
                     else:
                         record = WorkRecord(
                             username=username, work_date=work_date,
                             normal_hours=normal, overtime_hours=overtime,
                             avail_normal=normal, avail_overtime=overtime,
-                            work_content=default_content, status='pending'
+                            work_content=default_content, status='pending',
+                            task_id=t_id, task_name=t_name, plan_start=t_ks, plan_end=t_js
                         )
                         session.add(record)
                     count += 1

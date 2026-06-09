@@ -53,6 +53,7 @@ async def init_db():
     await ensure_work_content_column()
     await ensure_avail_columns()
     await ensure_display_name_column()
+    await ensure_workrecord_task_columns()
 
     print(f"数据库初始化完成，async_session_maker 类型: {type(async_session_maker)}")
 
@@ -212,6 +213,38 @@ async def ensure_display_name_column():
         conn.close()
     except Exception as e:
         print(f"检查/新增 display_name 列失败: {e}")
+        raise
+
+
+async def ensure_workrecord_task_columns():
+    """确保 work_records 有任务快照列 task_id/task_name/plan_start/plan_end。
+    旧记录这些列为 NULL（不回填——无法可靠还原历史记录当初属于哪个任务）。"""
+    cols = {
+        'task_id': "ALTER TABLE work_records ADD COLUMN task_id VARCHAR(50) NULL COMMENT '报工任务id快照'",
+        'task_name': "ALTER TABLE work_records ADD COLUMN task_name VARCHAR(200) NULL COMMENT '报工任务名快照'",
+        'plan_start': "ALTER TABLE work_records ADD COLUMN plan_start VARCHAR(20) NULL COMMENT '任务计划开始快照'",
+        'plan_end': "ALTER TABLE work_records ADD COLUMN plan_end VARCHAR(20) NULL COMMENT '任务计划结束快照'",
+    }
+    try:
+        conn = await aiomysql.connect(
+            host=DB_CONFIG['host'], port=DB_CONFIG['port'], user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'], db=DB_CONFIG['database'], charset=DB_CONFIG['charset']
+        )
+        async with conn.cursor() as cursor:
+            for col, ddl in cols.items():
+                await cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA=%s AND TABLE_NAME='work_records' AND COLUMN_NAME=%s
+                    """,
+                    (DB_CONFIG['database'], col)
+                )
+                if not (await cursor.fetchone())[0]:
+                    await cursor.execute(ddl)
+                    print(f"已为 work_records 增加 {col} 列")
+        conn.close()
+    except Exception as e:
+        print(f"检查/新增 work_records 任务快照列失败: {e}")
         raise
 
 

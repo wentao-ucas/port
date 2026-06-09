@@ -215,10 +215,9 @@
               <el-table-column label="日期" width="150">
                 <template #default="scope">
                   <span>{{ scope.row.date }}</span>
-                  <!-- 超期只对"待处理"有意义(它们才会按当前任务提交)；历史记录已提交、可能属于别的任务，
-                       而记录不绑任务，拿当前任务周期去量会误判，故历史 tab 不显示超期 -->
-                  <span v-if="activeTab === 'todo' && isOutOfRange(scope.row.date)" class="tag tag-red" style="margin-left:6px"
-                    title="报工日期不在任务计划周期内">超期</span>
+                  <!-- 超期按记录自己盖章的任务周期判，两 tab 都显示；旧记录没盖章→不显示 -->
+                  <span v-if="isRecOutOfRange(scope.row)" class="tag tag-red" style="margin-left:6px"
+                    :title="scope.row.plan_start ? `报工日期不在任务计划周期内（${scope.row.plan_start} ~ ${scope.row.plan_end}）` : '报工日期不在任务计划周期内'">超期</span>
                 </template>
               </el-table-column>
               <el-table-column label="星期" width="74">
@@ -252,6 +251,11 @@
                 <template #default="scope">
                   <el-input v-if="activeTab === 'todo'" v-model="scope.row.work_content" size="small" placeholder="工作内容" @change="() => saveRow(scope.row)" />
                   <span v-else class="ro-val">{{ scope.row.work_content || '—' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-if="activeTab === 'history'" label="任务" min-width="160">
+                <template #default="scope">
+                  <span class="ro-val">{{ scope.row.task_name || '—' }}</span>
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="96">
@@ -558,21 +562,21 @@ const submitDone = computed(() => submitItems.value.filter(i => i.state === 'ok'
 const submitOk = computed(() => submitItems.value.filter(i => i.state === 'ok').length)
 const submitFail = computed(() => submitItems.value.filter(i => i.state === 'fail').length)
 const submitPct = computed(() => submitItems.value.length ? Math.round(submitDone.value / submitItems.value.length * 100) : 0)
-// 任务计划周期：懒人模式取模板里的 _jhKsDate/_jhJsDate；完整模式模板没有这俩字段，
-// 改为按任务ID从已加载的 getMyTask 列表里匹配拿周期，两种模式都能判超期。
-const taskPeriod = computed(() => {
-  const td = parsedInfo.value.template_data || {}
-  const m = td.gstbRwId ? tasks.value.find(t => String(t.id) === String(td.gstbRwId)) : null
-  return {
-    ks: (m && m.jhKsDate) || td._jhKsDate || '',
-    js: (m && m.jhJsDate) || td._jhJsDate || '',
-  }
-})
-// 报工日期是否超出任务计划周期（早于开始 或 晚于结束）。无周期信息时一律不算超期
-const isOutOfRange = (date) => {
-  const { ks, js } = taskPeriod.value
-  if (!ks || !js || !date) return false
-  return date < ks || date > js
+// 日期 "Y-M-D" → 整数 YYYYMMDD（解析年/月/日再拼，补不补零都对、不依赖字符串比）。异常返回 null
+const dateToNum = (s) => {
+  const m = String(s || '').split('-')
+  if (m.length !== 3) return null
+  const y = Number(m[0]), mo = Number(m[1]), d = Number(m[2])
+  if (!y || !mo || !d) return null
+  return y * 10000 + mo * 100 + d
+}
+// 记录是否超期：按【记录自己盖章的任务周期】判（plan_start/plan_end），与当前配置无关。
+// 旧记录没盖章(plan_start/plan_end 为空) → 无法判 → 不算超期。整数比较，绝不因日期格式判错。
+const isRecOutOfRange = (rec) => {
+  if (!rec) return false
+  const dt = dateToNum(rec.date), ks = dateToNum(rec.plan_start), js = dateToNum(rec.plan_end)
+  if (dt == null || ks == null || js == null) return false
+  return dt < ks || dt > js
 }
 const pendingCount = computed(() => records.value.filter(r => r.status === 'pending').length)
 // 记录页分两 tab：待处理(pending+failed) / 历史记录(submitted)
@@ -616,6 +620,7 @@ const reportTask = computed(() => {
   if (!td || !td.gstbRwId) return null
   const m = tasks.value.find(t => String(t.id) === String(td.gstbRwId))
   return {
+    id: td.gstbRwId || '',
     rwMc: (m && m.rwMc) || td.gstbRwmc || '—',
     xmName: (m && m.ssXm) || '',
     rwZt: (m && m.rwZt) || '',
@@ -1059,12 +1064,17 @@ const generateDraft = async () => {
   if (!selectedCount.value) { ElMessage.warning('请先在日历上点选要填的天'); return }
   try {
     fillLoading.value = true
+    // 完整模式计划周期靠 getMyTask 匹配；确保 tasks 已加载，否则快照拿不到周期、超期判不出
+    if (tasks.value.length === 0) { try { await loadTasks() } catch (e) {} }
     const items = Object.entries(selectedMap.value).map(([date, h]) => ({
       date,
       normal_hours: h.normal_hours || 0,
       overtime_hours: h.overtime_hours || 0
     }))
-    const res = await axios.post('/worktime-api/fill-draft', { items })
+    // 任务快照：把"本次报工任务"的 id/名/计划周期一起传去盖到记录上（历史也能稳定判超期）
+    const rt = reportTask.value
+    const task = rt ? { task_id: rt.id || '', task_name: rt.rwMc || '', plan_start: rt.ks || '', plan_end: rt.js || '' } : {}
+    const res = await axios.post('/worktime-api/fill-draft', { items, task })
     if (res.data.success) {
       ElMessage.success(res.data.message)
       selectedMap.value = {}
@@ -1196,14 +1206,15 @@ const SUBMIT_CONCURRENCY = 5   // 前端并发上限（与后端 Semaphore 一�
 
 const submitSelectedRecords = async () => {
   if (selectedRecords.value.length === 0) { ElMessage.warning('请选择要提交的记录'); return }
-  // 软拦截：报工日期超出任务计划周期的，提交前显式确认（仍允许提交）
-  const oor = selectedRecords.value.filter(r => isOutOfRange(r.date))
+  // 软拦截：报工日期超出（记录自己盖章的）任务计划周期的，提交前显式确认（仍允许提交）
+  const oor = selectedRecords.value.filter(r => isRecOutOfRange(r))
   let confirmMsg = `确定提交选中的 ${selectedRecords.value.length} 条记录吗？`
   if (oor.length) {
-    const { ks, js } = taskPeriod.value
+    const p = oor.find(r => r.plan_start && r.plan_end)   // 取一条有周期的展示范围（待提交同属当前任务）
+    const period = p ? `（${p.plan_start} ~ ${p.plan_end}）` : ''
     const dates = oor.map(r => r.date).sort()
     const shown = dates.slice(0, 12).join('、') + (dates.length > 12 ? ` 等 ${dates.length} 个` : '')
-    confirmMsg = `<p>⚠ 有 <b>${oor.length}</b> 条报工日期超出任务计划周期（${ks} ~ ${js}）：</p>`
+    confirmMsg = `<p>⚠ 有 <b>${oor.length}</b> 条报工日期超出任务计划周期${period}：</p>`
       + `<p style="color:#d9534f;margin:6px 0">${shown}</p>`
       + `<p>这些日期理论上不在该任务范围内，确定仍要提交吗？</p>`
   }
