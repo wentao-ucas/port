@@ -1,0 +1,41 @@
+# ===== 依赖 / 构建产物 =====
+node_modules/
+frontend/node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ===== 密钥 / 真实环境配置（绝不入库；用 *.example 作模板）=====
+env.sh
+backend/env.sh
+deploy/env.sh
+*.env
+.env
+
+# ===== 数据库 / 数据文件（可能含用户 token/cookie）=====
+*.db
+*.sqlite
+*.sqlite3
+data/
+backend/data/
+
+# ===== 日志 =====
+*.log
+logs/
+backend/logs/
+frontend/vite_dev.log
+
+# ===== 打包产物 / 临时件 =====
+*.zip
+
+# ===== 测试导入导出件（可能含真实数据）=====
+*.xlsx
+
+# ===== IDE / 编辑器 / 工具 =====
+.idea/
+.vscode/
+.claude/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db

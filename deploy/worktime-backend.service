@@ -1,0 +1,32 @@
+# Worktime 后端 systemd 服务
+# 拷到 /etc/systemd/system/worktime-backend.service
+# 两台后端机器各装一份。
+# 启用： systemctl daemon-reload && systemctl enable --now worktime-backend
+
+[Unit]
+Description=Worktime Backend (Tornado, port 18760)
+After=network.target
+
+[Service]
+Type=simple
+User=worktime
+Group=worktime
+WorkingDirectory=/opt/worktime/backend
+
+# 关键：显式东八区，避免 UTC 服务器把报工时间戳算错日期
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+# 生产 DB/端口/门禁密码：从 env.sh.example 拷成 env.sh 填值（KEY=value 格式）
+EnvironmentFile=-/opt/worktime/backend/env.sh
+
+# 用项目自带的 venv（见 DEPLOY.md 创建步骤）
+ExecStart=/opt/worktime/venv/bin/python app.py
+
+Restart=on-failure
+RestartSec=3
+# 日志走 journald（也可看 /opt/worktime/backend/logs/）
+StandardOutput=append:/opt/worktime/backend/logs/service.out.log
+StandardError=append:/opt/worktime/backend/logs/service.err.log
+
+[Install]
+WantedBy=multi-user.target

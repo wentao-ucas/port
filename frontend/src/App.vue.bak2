@@ -1,0 +1,635 @@
+<template>
+  <div class="app-container">
+    <el-container>
+      <el-header>
+        <h1>💼 工时报工系统</h1>
+      </el-header>
+      
+      <el-main>
+        <el-tabs v-model="activeTab" type="card">
+          <!-- 配置管理 -->
+          <el-tab-pane label="⚙️ 配置管理" name="config">
+            <el-card>
+              <template #header>
+                <span>报工配置</span>
+              </template>
+              
+              <el-form :model="config" label-width="120px">
+                <el-form-item label="Curl 命令">
+                  <el-input 
+                    v-model="config.curl_template" 
+                    type="textarea" 
+                    :rows="10"
+                    placeholder="从浏览器开发者工具粘贴完整的 curl 命令..."
+                    @blur="parseCurlCommand"
+                  />
+                  <div style="margin-top: 8px; color: #909399; font-size: 12px;">
+                    💡 <strong>操作步骤：</strong><br>
+                    1. 在原报工系统填写一次报工<br>
+                    2. 打开浏览器开发者工具 (F12) → Network 标签<br>
+                    3. 找到 reportWorkingHours 请求<br>
+                    4. 右键 → Copy → Copy as cURL (bash)<br>
+                    5. 粘贴到上方输入框，系统会自动识别认证信息
+                  </div>
+                </el-form-item>
+                
+                <!-- 自动识别的信息展示 -->
+                <el-divider content-position="left">自动识别的信息</el-divider>
+                
+                <el-form-item label="Authorization">
+                  <el-input 
+                    v-model="parsedInfo.authorization" 
+                    type="textarea" 
+                    :rows="2"
+                    readonly
+                    placeholder="粘贴 curl 命令后自动识别"
+                  >
+                    <template #suffix>
+                      <el-tag :type="parsedInfo.authorization ? 'success' : 'info'" size="small">
+                        {{ parsedInfo.authorization ? '✓ 已识别' : '未识别' }}
+                      </el-tag>
+                    </template>
+                  </el-input>
+                </el-form-item>
+                
+                <el-form-item label="Cookie">
+                  <el-input 
+                    v-model="parsedInfo.cookie" 
+                    readonly
+                    placeholder="粘贴 curl 命令后自动识别"
+                  >
+                    <template #suffix>
+                      <el-tag :type="parsedInfo.cookie ? 'success' : 'info'" size="small">
+                        {{ parsedInfo.cookie ? '✓ 已识别' : '未识别' }}
+                      </el-tag>
+                    </template>
+                  </el-input>
+                </el-form-item>
+                
+                <el-form-item label="请求 URL">
+                  <el-input 
+                    v-model="parsedInfo.url" 
+                    readonly
+                    placeholder="粘贴 curl 命令后自动识别"
+                  >
+                    <template #suffix>
+                      <el-tag :type="parsedInfo.url ? 'success' : 'info'" size="small">
+                        {{ parsedInfo.url ? '✓ 已识别' : '未识别' }}
+                      </el-tag>
+                    </template>
+                  </el-input>
+                </el-form-item>
+                
+                <el-form-item label="模板数据">
+                  <el-input 
+                    v-model="parsedInfo.templateDataPreview" 
+                    type="textarea"
+                    :rows="3"
+                    readonly
+                    placeholder="粘贴 curl 命令后自动识别"
+                  >
+                    <template #suffix>
+                      <el-tag :type="parsedInfo.template_data ? 'success' : 'info'" size="small">
+                        {{ parsedInfo.template_data ? '✓ 已识别' : '未识别' }}
+                      </el-tag>
+                    </template>
+                  </el-input>
+                </el-form-item>
+                
+                <el-form-item>
+                  <el-button 
+                    type="primary" 
+                    @click="saveConfig" 
+                    :loading="loading"
+                    :disabled="!config.curl_template"
+                  >
+                    保存配置
+                  </el-button>
+                  <el-button @click="loadConfig">
+                    刷新配置
+                  </el-button>
+                  <el-button 
+                    v-if="parsedInfo.authorization"
+                    type="success"
+                    @click="testConfig"
+                    :loading="loading"
+                  >
+                    测试配置
+                  </el-button>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-tab-pane>
+          
+          <!-- 生成记录 -->
+          <el-tab-pane label="📅 生成记录" name="generate">
+            <el-card>
+              <template #header>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>批量生成工作日记录</span>
+                  <el-tag type="info" size="small">步骤 1：生成本地记录</el-tag>
+                </div>
+              </template>
+              
+              <el-alert
+                title="💡 说明"
+                type="info"
+                :closable="false"
+                style="margin-bottom: 20px"
+              >
+                自动生成该月所有工作日（周一至周五）的记录，生成后在"报工管理"中查看并勾选需要提交的记录
+              </el-alert>
+              
+              <el-form :model="generateForm" label-width="120px">
+                <el-form-item label="年份">
+                  <el-input-number v-model="generateForm.year" :min="2020" :max="2030" />
+                </el-form-item>
+                
+                <el-form-item label="月份">
+                  <el-input-number v-model="generateForm.month" :min="1" :max="12" />
+                </el-form-item>
+                
+                <el-form-item label="正常工时">
+                  <el-input-number v-model="generateForm.normal_hours" :min="0" :max="24" :step="0.5" />
+                  <span style="margin-left: 10px; color: #909399;">每天的正常工作时长</span>
+                </el-form-item>
+                
+                <el-form-item label="加班工时">
+                  <el-input-number v-model="generateForm.overtime_hours" :min="0" :max="24" :step="0.5" />
+                  <span style="margin-left: 10px; color: #909399;">每天的加班时长</span>
+                </el-form-item>
+                
+                <el-form-item>
+                  <el-button 
+                    type="success" 
+                    @click="generateRecords" 
+                    :loading="loading" 
+                    size="large"
+                  >
+                    <el-icon style="margin-right: 5px;"><DocumentAdd /></el-icon>
+                    生成记录
+                  </el-button>
+                  <span style="margin-left: 15px; color: #909399; font-size: 13px;">
+                    将生成该月所有工作日（周一至周五）的记录
+                  </span>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-tab-pane>
+          
+          <!-- 查询可报工时间 -->
+          <el-tab-pane label="🔍 查询可报工时间" name="query">
+            <el-card>
+              <template #header>
+                <span>查询可报工时间</span>
+              </template>
+              
+              <el-form :inline="true">
+                <el-form-item label="开始日期">
+                  <el-date-picker 
+                    v-model="queryForm.start_date" 
+                    type="date" 
+                    value-format="YYYY-MM-DD"
+                    placeholder="选择日期"
+                  />
+                </el-form-item>
+                
+                <el-form-item label="结束日期">
+                  <el-date-picker 
+                    v-model="queryForm.end_date" 
+                    type="date" 
+                    value-format="YYYY-MM-DD"
+                    placeholder="选择日期"
+                  />
+                </el-form-item>
+                
+                <el-form-item>
+                  <el-button type="primary" @click="queryWorkTime" :loading="loading">
+                    查询
+                  </el-button>
+                </el-form-item>
+              </el-form>
+              
+              <el-table 
+                :data="queryResults" 
+                border 
+                stripe 
+                v-if="queryResults.length > 0"
+                style="margin-top: 20px"
+              >
+                <el-table-column prop="date" label="日期" width="120" />
+                <el-table-column prop="normal_hours" label="可报正常工时" width="140" />
+                <el-table-column prop="overtime_hours" label="可报加班工时" width="140" />
+                <el-table-column prop="status" label="状态" width="100">
+                  <template #default="scope">
+                    <el-tag :type="scope.row.status === 'success' ? 'success' : 'danger'">
+                      {{ scope.row.status }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="error" label="错误信息" />
+              </el-table>
+            </el-card>
+          </el-tab-pane>
+          
+          <!-- 报工管理 -->
+          <el-tab-pane label="📝 报工管理" name="records">
+            <el-card>
+              <template #header>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div>
+                    <span style="font-size: 16px; font-weight: 500;">报工记录</span>
+                    <el-tag type="warning" size="small" style="margin-left: 10px;">步骤 2：提交到服务器</el-tag>
+                  </div>
+                  <div>
+                    <el-button type="primary" @click="loadRecords" :loading="loading">
+                      <el-icon style="margin-right: 5px;"><Refresh /></el-icon>
+                      刷新
+                    </el-button>
+                    <el-button 
+                      type="danger" 
+                      @click="submitSelectedRecords" 
+                      :loading="loading"
+                      :disabled="selectedRecords.length === 0"
+                      size="large"
+                    >
+                      <el-icon style="margin-right: 5px;"><Upload /></el-icon>
+                      提交到服务器 ({{ selectedRecords.length }})
+                    </el-button>
+                  </div>
+                </div>
+              </template>
+              
+              <el-alert
+                v-if="records.filter(r => r.status === 'pending').length > 0"
+                :title="`有 ${records.filter(r => r.status === 'pending').length} 条记录待提交`"
+                type="warning"
+                :closable="false"
+                style="margin-bottom: 15px"
+              >
+                勾选要提交的记录，点击"提交到服务器"按钮完成报工
+              </el-alert>
+              
+              <el-table 
+                :data="records" 
+                border 
+                stripe
+                @selection-change="handleSelectionChange"
+              >
+                <el-table-column type="selection" width="55" />
+                <el-table-column prop="date" label="日期" width="120" />
+                <el-table-column label="星期" width="80">
+                  <template #default="scope">
+                    <el-tag :type="getWeekdayType(scope.row.date)" size="small">
+                      {{ getWeekdayName(scope.row.date) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="normal_hours" label="正常工时" width="100" />
+                <el-table-column prop="overtime_hours" label="加班工时" width="100" />
+                <el-table-column prop="status" label="状态" width="100">
+                  <template #default="scope">
+                    <el-tag 
+                      :type="scope.row.status === 'submitted' ? 'success' : 'info'"
+                    >
+                      {{ statusMap[scope.row.status] || scope.row.status }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="创建时间" width="180" />
+              </el-table>
+            </el-card>
+          </el-tab-pane>
+        </el-tabs>
+      </el-main>
+    </el-container>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import axios from 'axios'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const activeTab = ref('config')
+const loading = ref(false)
+
+// 配置
+const config = ref({
+  authorization: '',
+  cookie: '',
+  curl_template: ''
+})
+
+// 解析后的信息
+const parsedInfo = ref({
+  authorization: '',
+  cookie: '',
+  url: '',
+  template_data: null,
+  templateDataPreview: ''
+})
+
+// 生成表单
+const generateForm = ref({
+  year: new Date().getFullYear(),
+  month: new Date().getMonth() + 1,
+  normal_hours: 8.0,
+  overtime_hours: 0.0
+})
+
+// 查询表单
+const queryForm = ref({
+  start_date: '',
+  end_date: ''
+})
+
+const queryResults = ref([])
+
+// 记录列表
+const records = ref([])
+const selectedRecords = ref([])
+
+const statusMap = {
+  'pending': '待提交',
+  'submitted': '已提交',
+  'failed': '提交失败'
+}
+
+// 加载配置
+const loadConfig = async () => {
+  try {
+    lohasConfig.value = !!config.value.authorization
+      ading.value = true
+    const res = await axios.get('/api/config')
+    if (res.data.success) {
+      config.value = res.data.data.configs
+      // 如果有 curl 模板，自动解析
+      if (config.value.curl_template) {
+        parseCurlCommand()
+      }
+    }
+  } catch (error) {
+    ElMessage.error('加载配置失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 解析 curl 命令
+const parseCurlCommand = () => {
+  if (!config.value.curl_template) {
+    return
+  }
+  
+  try {
+    const curlStr = config.value.curl_template
+    
+    // 提取 Authorization
+    const authMatch = curlStr.match(/-H\s+'Authorization:\s*([^']+)'/)
+    parsedInfo.value.authorization = authMatch ? authMatch[1].trim() : ''
+    
+    // 提取 Cookie
+    const cookieMatch = curlStr.match(/-b\s+'([^']+)'/)
+    parsedInfo.value.cookie = cookieMatch ? cookieMatch[1].trim() : ''
+    
+    // 提取 URL
+    const urlMatch = curlStr.match(/curl\s+'([^']+)'/)
+    parsedInfo.value.url = urlMatch ? urlMatch[1].trim() : ''
+    
+    // 提取 --data-raw 中的 JSON 数据
+    const dataMatch = curlStr.match(/--data-raw\s+'({[\s\S]*?})'\s/)
+    if (dataMatch) {
+      parsedInfo.value.template_data = JSON.parse(dataMatch[1])
+      // 只显示关键字段
+      const preview = {
+        工作类型: parsedInfo.value.template_data.gstbGzlx,
+        工作描述: parsedInfo.value.template_data.gstbGzbg,
+        任务名称: parsedInfo.value.template_data.gstbRwmc,
+        项目: parsedInfo.value.template_data.gstbSsxm
+      }
+      parsedInfo.value.templateDataPreview = JSON.stringify(preview, null, 2)
+    }
+    
+    if (parsedInfo.value.authorization && parsedInfo.value.cookie) {
+      ElMessage.success('✓ 自动识别成功！检测到认证信息')
+    }
+  } catch (error) {
+    ElMessage.warning('解析 curl 命令失败，请检查格式')
+  }
+}
+
+// 保存配置
+const saveConfig = async () => {
+  try {
+    loading.value = true
+    const res = await axios.post('/api/config', config.value)
+    if (res.data.success) {
+      ElMessage.success('配置保存成功')
+      // 如果服务器返回了解析结果，更新显示
+      if (res.data.parsed) {
+        parsedInfo.value = {
+          ...res.data.parsed,
+          templateDataPreview: res.data.parsed.template_data 
+            ? JSON.stringify({
+                工作类型: res.data.parsed.template_data.gstbGzlx,
+                工作描述: res.data.parsed.template_data.gstbGzbg,
+                任务名称: res.data.parsed.template_data.gstbRwmc,
+                项目: res.data.parsed.template_data.gstbSsxm
+              }, null, 2)
+            : ''
+        }
+      }
+    } else {
+      ElMessage.error(res.data.message)
+    }
+  } catch (error) {
+    ElMessage.error('保存失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 测试配置
+const testConfig = async () => {
+  try {
+    loading.value = true
+    const today = new Date().toISOString().split('T')[0]
+    const res = await axios.post('/api/query-worktime', {
+      start_date: today,
+      end_date: today
+    })
+    if (res.data.success) {
+      ElMessage.success('✓ 配置测试成功！认证信息有效')
+    } else {
+      ElMessage.error('配置测试失败: ' + res.data.message)
+    }
+  } catch (error) {
+    ElMessage.error('测试失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 生成记录
+const generateRecords = async () => {
+  if (!hasConfig.value && generateForm.value.auto_query) {
+    ElMessage.warning('使用智能生成需要先配置认证信息')
+    activeTab.value = 'config'
+    return
+  try {
+    loading.value = true
+    const res = await axios.post('/api/generate', generateForm.value)
+    if (res.data.success) {
+      ElMessage.success(res.data.message)
+      // 切换到记录管理并刷新
+      activeTab.value = 'records'
+      await loadRecords()
+    } else {
+      ElMessage.error(res.data.message)
+    }
+  } catch (error) {
+    ElMessage.error('生成失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 获取星期几
+const getWeekdayName = (dateStr) => {
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  const date = new Date(dateStr)
+  return weekdays[date.getDay()]
+}
+
+// 获取星期标签类型
+const getWeekdayType = (dateStr) => {
+  const date = new Date(dateStr)
+  const day = date.getDay()
+  if (day === 0 || day === 6) return 'danger'  // 周末
+  return ''  // 工作日
+}
+
+// 查询可报工时间
+const queryWorkTime = async () => {
+  if (!queryForm.value.start_date || !queryForm.value.end_date) {
+    ElMessage.warning('请选择日期范围')
+    return
+  }
+  
+  try {
+    loading.value = true
+    const res = await axios.post('/api/query-worktime', queryForm.value)
+    if (res.data.success) {
+      queryResults.value = res.data.data
+      ElMessage.success('查询完成')
+    } else {
+      ElMessage.error(res.data.message)
+    }
+  } catch (error) {
+    ElMessage.error('查询失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 加载记录
+const loadRecords = async () => {
+  try {
+    loading.value = true
+    const res = await axios.get('/api/records')
+    if (res.data.success) {
+      records.value = res.data.data
+    }
+  } catch (error) {
+    ElMessage.error('加载记录失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 选择变化
+const handleSelectionChange = (selection) => {
+  selectedRecords.value = selection
+}
+
+// 提交选中记录
+const submitSelectedRecords = async () => {
+  if (selectedRecords.value.length === 0) {
+    ElMessage.warning('请选择要提交的记录')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要提交选中的 ${selectedRecords.value.length} 条记录吗？`,
+      '确认提交',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    loading.value = true
+    const record_ids = selectedRecords.value.map(r => r.id)
+    const res = await axios.post('/api/submit', { record_ids })
+    
+    if (res.data.success) {
+      const results = res.data.data
+      const successCount = results.filter(r => r.status === 'success').length
+      const failedCount = results.length - successCount
+      
+      if (failedCount === 0) {
+        ElMessage.success(`全部提交成功！共 ${successCount} 条`)
+      } else {
+        ElMessage.warning(`提交完成：成功 ${successCount} 条，失败 ${failedCount} 条`)
+      }
+      
+      // 刷新列表
+      await loadRecords()
+    } else {
+      ElMessage.error(res.data.message)
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('提交失败: ' + error.message)
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  loadConfig()
+  loadRecords()
+})
+</script>
+
+<style scoped>
+.app-container {
+  min-height: 100vh;
+  background: #f0f2f5;
+}
+
+.el-header {
+  background: #409eff;
+  color: white;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.el-header h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.el-main {
+  padding: 20px;
+}
+
+.el-card {
+  margin-bottom: 20px;
+}
+</style>
